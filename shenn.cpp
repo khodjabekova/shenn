@@ -6,67 +6,15 @@
 #include <string.h>
 #include <string>
 #include <iostream>
+#include <vector>
+
 using namespace std;
 
 #define MAXLENGHT 1000
 #define MAXLIST 100
-
 #define clear() printf("\033[H\033[J")
 
-void start()
-{
-    clear();
-    printf("Welcome!\n");
-}
 
-void get_current_dir()
-{
-    char cwd[1024];
-    getcwd(cwd, sizeof(cwd));
-    printf("\nDir: %s \n", cwd);
-}
-
-void help()
-{
-    puts("еще не придумали, что сюда написать:"
-          "\n>cd"
-          "\n>ls"
-          "\n>exit");
-
-    return;
-}
-
-bool read_command(char str[MAXLENGHT])
-{
-    string cmd;
-    cin >> cmd;
-
-    if (cmd.length() > 0)
-    {
-        cmd.copy(str, cmd.length(), 0);
-        return true;
-    }
-    else
-    {
-        return false;
-    }
-}
-
-bool parse_pipe(char* str, char** strpiped)
-{
-    int i;
-    for (int i = 0; i < 2; i++)
-    {
-        strpiped[i] = strsep(&str, "|");
-        if (strpiped[i] == NULL)
-            break;
-    }
-
-    if(strpiped[1] == NULL)
-      return false;
-    else
-      return true;
-}
 bool parse_space(char* str, char** parsed)
 {
     for (int i = 0; i < MAXLIST; i++)
@@ -75,61 +23,108 @@ bool parse_space(char* str, char** parsed)
 
         if (parsed[i] == NULL)
             break;
+
         if (strlen(parsed[i]) == 0)
             i--;
     }
 }
+
+
 void execute_cmd(char** parsed)
 {
     pid_t pid;
 
     switch (pid = fork())
     {
-      case -1:
-        printf("\n при вызове fork() возникла ошибка");
-        return;
-      case 0:
-        printf(" CHILD: Это процесс-потомок!\n");
-        if (execvp(parsed[0], parsed) < 0)
-              printf("\nCould not execute command..");
+        case -1:
+            printf("\n при вызове fork() возникла ошибка");
+            return;
+        case 0:
 
-          exit(0);
-      default:
-        wait(NULL);
-        return;
+            if (execvp(parsed[0], parsed) < 0)
+                printf("\nCould not execute command..");
+
+            exit(0);
+        default:
+            wait(NULL);
+
+            return;
     }
 
 }
 
+
+bool read_command_cpp(string *str_cmd){
+    cout << endl << "Your command: ";
+    getline(cin, *str_cmd);
+
+    return ((*str_cmd).length() > 0);
+}
+
+
+vector<char*> split_by_delimiter(string str_command, string delim) {
+    vector<char*> commands;
+
+    int last_delimiter_position = 0;
+    int new_delimiter_position = 0;
+    bool delimiter_not_founded = false;
+
+    while(!delimiter_not_founded){
+        new_delimiter_position = str_command.find(delim, new_delimiter_position);
+
+        if (new_delimiter_position != -1) {
+            string command = str_command.substr(last_delimiter_position, new_delimiter_position - last_delimiter_position);
+
+            char * ccommand = new char[command.size()+1];
+            copy(command.begin(), command.end(), ccommand);
+            ccommand[command.size()] = '\0';
+            commands.push_back(ccommand);
+
+            new_delimiter_position++;
+            last_delimiter_position = new_delimiter_position;
+        }
+        else {
+            string command = str_command.substr(last_delimiter_position);
+
+            char * ccommand = new char[command.size()+1];
+            copy(command.begin(), command.end(), ccommand);
+            ccommand[command.size()] = '\0';
+            commands.push_back(ccommand);
+
+            delimiter_not_founded = true;
+        }
+    }
+
+    return commands;
+}
+
+vector<string> commands_storage;
+int cur_command = 0;
 int main()
 {
-    char command[MAXLENGHT];
-    char* parsed[MAXLIST];
-    char* parsed_pipe[MAXLIST];
-    char str[MAXLENGHT];
+    string str_command;
 
-    //start();
-    //get_current_dir();
-    //help();
+    bool exit = false;
 
-      if(read_command(str)){
-        char* str_piped[2];
-        bool piped = false;
-        piped = parse_pipe(str, str_piped);
+    while(not exit) {
+        if (read_command_cpp(&str_command)) {
+            if (str_command != "exit()") {
 
-        if (piped)
-        {
-            parse_space(str_piped[0], parsed);
-            parse_space(str_piped[1], parsed_pipe);
+                commands_storage.push_back(str_command);
+
+                vector<char *> commands = split_by_delimiter(str_command, "|");
+
+                for (unsigned long i = 0; i < commands.size(); i++) {
+                    char *parsed[MAXLIST];
+                    parse_space(commands.at(i), parsed);
+
+                    execute_cmd(parsed);
+                }
+            }
+            else
+                exit = true;
         }
-        else
-        {
-            parse_space(str, parsed);
-        }
-
-        execute_cmd(parsed);
-      }
-
+    }
 
     return 0;
 }
