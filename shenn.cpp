@@ -7,6 +7,7 @@
 #include <string>
 #include <iostream>
 #include <vector>
+#include <signal.h>
 
 using namespace std;
 
@@ -15,9 +16,25 @@ using namespace std;
 #define clear() printf("\033[H\033[J")
 
 
-bool parse_space(char* str, char** parsed)
+void sigChld(int arg) {
+    int pid, status;
+    waitpid(pid, &status, 0);
+
+    if (WIFEXITED(status)) {
+        cout << endl << "background process " << pid << " done";
+    }
+    else {
+        cerr << endl << "background process " << pid << " failed";
+    }
+}
+
+
+bool parse_space(char* str, char** parsed, bool *background)
 {
-    for (int i = 0; i < MAXLIST; i++)
+    char *last_symbol = "";
+    int i = 0;
+
+    for (i = 0; i < MAXLIST; i++)
     {
         parsed[i] = strsep(&str, " ");
 
@@ -26,31 +43,144 @@ bool parse_space(char* str, char** parsed)
 
         if (strlen(parsed[i]) == 0)
             i--;
+        else
+            last_symbol = parsed[i];
     }
+
+    if (last_symbol != "" && last_symbol[0] == '&') {
+        parsed[i-1] = NULL;
+        *background = true;
+    }
+
+//    for(i=0; i < MAXLIST; i++)
+//    {
+//        if (parsed[i][0] == '&') {
+//            parsed[i - 1] = NULL;
+//            *background = true;
+//
+//            break;
+//        }
+//    }
 }
 
 
-void execute_cmd(char** parsed)
+bool execute_cmd(char** parsed)
 {
     pid_t pid;
 
     switch (pid = fork())
     {
         case -1:
-            printf("\n при вызове fork() возникла ошибка");
-            return;
+            cerr << "Error in fork()";
+
+            return false;
         case 0:
-
             if (execvp(parsed[0], parsed) < 0)
-                printf("\nCould not execute command..");
+                cerr << "Could not execute command";
 
-            exit(0);
+            return false;
         default:
-            wait(NULL);
+            int status;
+            if (waitpid(pid, &status, 0) > 0) {
+                if (WIFEXITED(status))
+                {
+                    return true;
+                }
+                else{
+                    cerr << "Child process terminated with error";
 
-            return;
+                    return false;
+                }
+            }
+            else {
+                cerr << "waitpid failed";
+
+                return false;
+            }
+    }
+}
+
+
+bool execute_pipe(vector<char*> pipe_commands){
+    char* command1 = pipe_commands[0];
+    char* command2 = pipe_commands[1];
+
+    bool background;
+
+    char *parsed1[MAXLIST];
+    parse_space(command1, parsed1, &background);
+
+    char *parsed2[MAXLIST];
+    parse_space(command2, parsed2, &background);
+
+    int pfd[2];
+    pipe(pfd);
+
+    int pid1, pid2;
+
+    switch (pid1 = fork()){
+        case -1:
+            cerr << "Error in fork()";
+
+            return false;
+
+        case 0:
+            close(STDOUT_FILENO);
+            dup2(pfd[1], STDOUT_FILENO);
+
+            close(pfd[0]);
+            close(pfd[1]);
+
+            execvp(parsed1[0], parsed1);
+
+        default:
+            close(pfd[1]);
+
+            wait(NULL);
     }
 
+    switch (pid2 = fork()){
+        case -1:
+            cerr << "Error in fork()";
+
+            return false;
+
+        case 0:
+            close(STDIN_FILENO);
+            dup2(pfd[0], STDIN_FILENO);
+
+            close(pfd[0]);
+            close(pfd[1]);
+
+            execvp(parsed2[0], parsed2);
+
+        default:
+            close(pfd[0]);
+
+            wait(NULL);
+    }
+
+    return true;
+}
+
+
+bool execute_background(char** parsed){
+    pid_t pid;
+
+    switch (pid = fork())
+    {
+        case -1:
+            cerr << "Error in fork()";
+
+            return false;
+        case 0:
+            if (execvp(parsed[0], parsed) < 0)
+                cerr << "Could not execute command";
+
+            return false;
+        default:
+            signal(SIGCHLD, sigChld);
+    }
 }
 
 
@@ -62,8 +192,7 @@ bool read_command_cpp(string *str_cmd){
 }
 
 
-vector<char*> split_by_delimiter(string str_command, string delim) {
-    vector<char*> commands;
+void split_by_delimiter(vector<char*> *commands, string str_command, string delim) {
 
     int last_delimiter_position = 0;
     int new_delimiter_position = 0;
@@ -78,9 +207,9 @@ vector<char*> split_by_delimiter(string str_command, string delim) {
             char * ccommand = new char[command.size()+1];
             copy(command.begin(), command.end(), ccommand);
             ccommand[command.size()] = '\0';
-            commands.push_back(ccommand);
+            (*commands).push_back(ccommand);
 
-            new_delimiter_position++;
+            new_delimiter_position += delim.size();
             last_delimiter_position = new_delimiter_position;
         }
         else {
@@ -89,14 +218,38 @@ vector<char*> split_by_delimiter(string str_command, string delim) {
             char * ccommand = new char[command.size()+1];
             copy(command.begin(), command.end(), ccommand);
             ccommand[command.size()] = '\0';
-            commands.push_back(ccommand);
+            (*commands).push_back(ccommand);
 
             delimiter_not_founded = true;
         }
     }
-
-    return commands;
 }
+
+
+string define_delimeter(string command){
+    if (command.find("&&") != -1){
+        return "&&";
+    }
+    else{
+        if (command.find("||") != -1){
+            return "||";
+        }
+        else{
+            if (command.find(",") != -1){
+                return ",";
+            }
+            else {
+                if (command.find("|") != -1) {
+                    return "|";
+                }
+                else {
+                    return "";
+                }
+            }
+        }
+    }
+}
+
 
 vector<string> commands_storage;
 int cur_command = 0;
@@ -108,17 +261,52 @@ int main()
 
     while(not exit) {
         if (read_command_cpp(&str_command)) {
+
             if (str_command != "exit()") {
 
                 commands_storage.push_back(str_command);
 
-                vector<char *> commands = split_by_delimiter(str_command, "|");
+                string delimeter = define_delimeter(str_command);
 
-                for (unsigned long i = 0; i < commands.size(); i++) {
-                    char *parsed[MAXLIST];
-                    parse_space(commands.at(i), parsed);
+                vector<char*> commands;
 
-                    execute_cmd(parsed);
+                if (delimeter != "") {
+                    split_by_delimiter(&commands, str_command, delimeter);
+                }
+                else{
+                    char * ccommand = new char[str_command.size()+1];
+                    copy(str_command.begin(), str_command.end(), ccommand);
+                    ccommand[str_command.size()] = '\0';
+
+                    commands.push_back(ccommand);
+                }
+
+                if (delimeter != "|") {
+                    for (unsigned long i = 0; i < commands.size(); i++) {
+
+                        //background = str_command.size() > 1 && str_command[str_command.size()-1] == '&' && str_command[str_command.size()-2] != '&';
+
+                        char *parsed[MAXLIST];
+
+                        bool background;
+                        parse_space(commands.at(i), parsed, &background);
+
+                        if (!background) {
+                            bool result;
+                            result = execute_cmd(parsed);
+
+                            if ((delimeter == "&&" && !result) || (delimeter == "||" && result)) {
+                                break;
+                            }
+                        }
+                        else{
+                            bool result;
+                            result = execute_background(parsed);
+                        }
+                    }
+                }
+                else {
+                    execute_pipe(commands);
                 }
             }
             else
